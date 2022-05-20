@@ -28,6 +28,14 @@ $app->options('/{routes:.+}', function ($request, $response, $args) {
   return $response;
 });
 
+$app->add(function ($req, $res, $next) {
+  $response = $next($req, $res);
+  return $response
+    ->withHeader('Access-Control-Allow-Origin', '*')
+    ->withHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept')
+    ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
+}); 
+
 $container = $app->getContainer();
 $container['db'] = function ($c) {
   $db = $c['settings']['db'];
@@ -317,25 +325,29 @@ $app->get('/alumnos', function (Request $request, Response $response, array $arg
 
   $arrT = validaToken($token, $bd, $conn);
 
-  if(!empty($arrData['nombre'])){
+  if (!empty($arrData['nombre'])) {
     $whereNombre = " AND(
         CONCAT_WS(' ', ap_paterno, ap_materno, nombre) LIKE '%{$arrData['nombre']}%' 
         OR CONCAT_WS(' ', nombre, ap_paterno, ap_materno) LIKE '%{$arrData['nombre']}%'
     )";
   }
 
-  if(!empty($arrData['estado'])){
+  if (!empty($arrData['estado'])) {
     $whereEstado = " AND estado LIKE '%{$arrData['estado']}%'";
   }
 
-  if(!empty($arrData['sexo'])){
+  if (!empty($arrData['sexo'])) {
     $whereSexo = " AND sexo = '{$arrData['sexo']}'";
+  }
+
+  if (!empty($arrData['matricula'])) {
+    $whereMatricula = " AND clave_alu = '{$arrData['matricula']}'";
   }
 
   if ($arrT['valido']) {
     $sql = "SELECT clave_alu, clave_admin, ap_paterno, ap_materno, nombre, sexo, curp, peso, estatura, direccion, colonia, cp, ciudad, id_estado, delegacion, telefono, celular, email, status_alu, fedita 
     FROM alumnos d LEFT JOIN estados e ON (d.id_estado = e.id)
-    WHERE 1=1 " . $whereNombre . $whereEstado . $whereSexo;
+    WHERE 1=1 " . $whereNombre . $whereEstado . $whereSexo . $whereMatricula;
     #echo 
     $rs = query($sql, $conn);
 
@@ -409,7 +421,7 @@ $app->post('/alumnos', function (Request $request, Response $response, array $ar
           }
         }
         $sql .= "\nfedita=:fedita";
-        $data['fedita'] = strtotime(date('Y-m-d H:i:s'), time());
+        $data['fedita'] = date('Y-m-d H:i:s');
         $arr = array(
           "success" => true,
           "data" => $rs
@@ -431,6 +443,169 @@ $app->post('/alumnos', function (Request $request, Response $response, array $ar
             "detail" => $arr_empty
           )
         );
+      }
+    }
+  } else {
+    $arr = array(
+      "error" => array(
+        "code" => 230,
+        "detail" => "No autorizado"
+      )
+    );
+
+    $http_status = 401;
+  }
+
+  $response->getBody()->write(json_encode($arr, JSON_UNESCAPED_UNICODE));
+
+  if ($http_status != 200) {
+    $newResponse = $response->withStatus($http_status);
+  }
+
+  $newResponse = $response->withHeader(
+    'Content-Type',
+    'application/json; charset=UTF-8'
+  );
+
+  return $newResponse;
+});
+
+$app->put('/alumnos/{matricula}', function (Request $request, Response $response, array $args) {
+  $conn = $this->db;
+  $bd = $GLOBALS['bd'];
+
+  $matricula = $args['matricula'];
+  $http_status = 200;
+  $data = $request->getParsedBody();
+  $arrData = str_replace("'", "\"", $data);
+  $token = $arrData['token'];
+
+  $arrT = validaToken($token, $bd, $conn);
+
+  if ($arrT['valido']) {
+    $sql = "SELECT * FROM alumnos WHERE clave_alu = {$matricula} ";
+    $rs = query($sql, $conn);
+
+    if (count($rs) == 0) {
+      $arr = array(
+        "error" => array(
+          "code" => 228,
+          "detail" => "Matricula no registrada"
+        )
+      );
+    } else {
+      $valido = true;
+      $arr_empty = array();
+
+      foreach ($GLOBALS['arr_campos_alumno_nn'] as $k => $v) {
+        if ($v != 'clave_alu') {
+          if (empty($arrData[$v])) {
+            $arr_empty[$v] = "no puede ser nulo";
+            $valido = false;
+          }
+        }
+      }
+
+      if ($valido) {
+        $data = array();
+        $sql = "UPDATE {$bd}.alumnos SET\n";
+        foreach ($GLOBALS['arr_campos_alumno'] as $k => $v) {
+          if (isset($arrData[$v])) {
+            $data[$v] = $arrData[$v];
+            $sql .= "{$v}=:{$v},\n";
+          }
+        }
+        $sql .= "\nfedita=:fedita WHERE clave_alu=:clave_alu";
+        $data['fedita'] = date('Y-m-d H:i:s');
+        $data['clave_alu'] = $matricula;
+        $arr = array(
+          "success" => true,
+          "detail" => "alumno actualizado"
+        );
+        $stmt = $conn->prepare($sql);
+        $stmt->execute($data);
+        $error = $conn->errorInfo();
+        if (intval($error[0] != 0)) {
+          $arr = array("error" => array(
+            "code" => '230',
+            'detail' => 'Error al actualizar {$error[1]}'
+          ));
+          $status_http = 401;
+        }
+      } else {
+        $arr = array(
+          "error" => array(
+            "code" => 230,
+            "detail" => $arr_empty
+          )
+        );
+      }
+    }
+  } else {
+    $arr = array(
+      "error" => array(
+        "code" => 230,
+        "detail" => "No autorizado"
+      )
+    );
+
+    $http_status = 401;
+  }
+
+  $response->getBody()->write(json_encode($arr, JSON_UNESCAPED_UNICODE));
+
+  if ($http_status != 200) {
+    $newResponse = $response->withStatus($http_status);
+  }
+
+  $newResponse = $response->withHeader(
+    'Content-Type',
+    'application/json; charset=UTF-8'
+  );
+
+  return $newResponse;
+});
+
+$app->delete('/alumnos/{matricula}', function (Request $request, Response $response, array $args) {
+  $conn = $this->db;
+  $bd = $GLOBALS['bd'];
+
+  $matricula = $args['matricula'];
+  $http_status = 200;
+  $data = $request->getParsedBody();
+  $arrData = str_replace("'", "\"", $data);
+  $token = $arrData['token'];
+
+  $arrT = validaToken($token, $bd, $conn);
+
+  if ($arrT['valido']) {
+    $sql = "SELECT * FROM alumnos WHERE clave_alu = {$matricula} ";
+    $rs = query($sql, $conn);
+
+    if (count($rs) == 0) {
+      $arr = array(
+        "error" => array(
+          "code" => 228,
+          "detail" => "Matricula no registrada"
+        )
+      );
+    } else {
+      $data = array();
+      $sql = "DELETE FROM {$bd}.alumnos WHERE clave_alu=:clave_alu\n";
+      $data['clave_alu'] = $matricula;
+      $arr = array(
+        "success" => true,
+        "detail" => "alumno eliminado"
+      );
+      $stmt = $conn->prepare($sql);
+      $stmt->execute($data);
+      $error = $conn->errorInfo();
+      if (intval($error[0] != 0)) {
+        $arr = array("error" => array(
+          "code" => '230',
+          'detail' => 'Error al eliminar {$error[1]}'
+        ));
+        $status_http = 401;
       }
     }
   } else {
